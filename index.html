@@ -2,208 +2,646 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>カカオクランチ・ディストリビューター</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>カカオクランチ・パニック</title>
+    <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        body {
+        body { 
+            margin: 0; 
+            overflow: hidden; 
+            background-color: #f3f4f6; 
+            font-family: 'Hiragino Kaku Gothic ProN', 'Noto Sans JP', sans-serif;
+            touch-action: none;
+            user-select: none;
+        }
+        canvas { display: block; }
+        #ui-layer { 
+            position: absolute; 
+            top: 0; left: 0; 
+            width: 100%; height: 100%;
+            pointer-events: none; 
+        }
+        .screen-overlay {
+            position: absolute;
+            inset: 0;
             display: flex;
             flex-direction: column;
             align-items: center;
-            background-color: #333;
+            justify-content: center;
+            background-color: rgba(0, 0, 0, 0.75);
             color: white;
-            font-family: sans-serif;
-            margin-top: 50px;
+            pointer-events: auto;
+            backdrop-filter: blur(4px);
+            transition: opacity 0.3s;
         }
-        canvas {
-            background-color: #f4f4f9;
-            border: 4px solid #8b4513;
-            border-radius: 10px;
-            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+        .hidden { opacity: 0; pointer-events: none; }
+        .btn {
+            background-color: #ea580c;
+            color: white;
+            padding: 1rem 2.5rem;
+            border-radius: 9999px;
+            font-size: 1.25rem;
+            font-weight: bold;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            transition: transform 0.1s, background-color 0.2s;
+            cursor: pointer;
+            border: none;
+            outline: none;
         }
-        .instructions {
-            margin-top: 20px;
-            text-align: center;
-        }
-        kbd {
-            background: #eee;
-            color: #333;
-            padding: 3px 6px;
-            border-radius: 4px;
-            border: 1px solid #ccc;
-        }
+        .btn:hover { background-color: #c2410c; transform: scale(1.05); }
+        .btn:active { transform: scale(0.95); }
+        .hud-text { text-shadow: 2px 2px 4px rgba(0,0,0,0.5); }
     </style>
 </head>
 <body>
 
-    <h1>🍫 カカオクランチ・ディストリビューター 🍫</h1>
-    <canvas id="gameCanvas" width="800" height="500"></canvas>
-    
-    <div class="instructions">
-        <p>【操作方法】</p>
-        <p>上下移動: <kbd>↑</kbd> <kbd>↓</kbd> キー</p>
-        <p>カカオクランチを投げる: <kbd>スペース</kbd> キー</p>
-        <p>迫りくるお疲れの同僚たちにチョコをぶつけて撃沈（リフレッシュ）させよう！<br>同僚に左端まで到達されるとゲームオーバーです。</p>
+<canvas id="gameCanvas"></canvas>
+
+<div id="ui-layer">
+    <!-- HUD -->
+    <div id="hud" class="hidden flex justify-between items-start p-4 w-full text-2xl font-bold text-white hud-text">
+        <div id="scoreDisplay">撃沈: 0人</div>
+        <div id="timeDisplay">残り時間: 30秒</div>
     </div>
 
+    <!-- スタート画面 -->
+    <div id="startScreen" class="screen-overlay">
+        <h1 class="text-5xl md:text-6xl font-extrabold mb-4 text-orange-500 drop-shadow-lg text-center leading-tight">
+            カカオクランチ<br>パニック
+        </h1>
+        <p class="text-xl md:text-2xl mb-2 font-bold">「カカオクランチの時間ですよー！どうぞ！」</p>
+        <p class="text-gray-300 mb-8 text-center max-w-md">
+            オフィス中を駆け回り、同僚たちにカカオクランチを投げつけよう！<br>
+            <span class="text-sm mt-2 block text-gray-400">
+                【操作】男性は自動で歩き回ります<br>
+                画面をタップ・クリックしてチョコを投げよう！<br>
+                ※音声が出ます（環境によって出ない場合があります）
+            </span>
+        </p>
+        <button class="btn" onclick="startGame()">配り歩く (START)</button>
+    </div>
+
+    <!-- 結果画面 -->
+    <div id="resultScreen" class="screen-overlay hidden">
+        <h2 class="text-4xl font-bold mb-2 text-red-400">タイムアップ！</h2>
+        <p class="text-2xl mb-6">同僚たちは撃沈した。</p>
+        <div class="bg-white/10 p-6 rounded-2xl mb-8 backdrop-blur-md">
+            <p class="text-xl text-gray-300">配った人数</p>
+            <p class="text-6xl font-extrabold text-orange-400" id="finalScore">0 <span class="text-2xl">人</span></p>
+        </div>
+        <button class="btn" onclick="startGame()">もう一度配る</button>
+    </div>
+</div>
+
 <script>
-    const canvas = document.getElementById('gameCanvas');
-    const ctx = canvas.getContext('2d');
+// --- 音声合成 (Web Speech API) 保護付き ---
+const synth = window.speechSynthesis || null;
+let isStartVoicePlaying = false;
 
-    // ゲームの基本設定
-    let score = 0;
-    let gameOver = false;
-    let frameCount = 0;
-
-    // プレイヤー（配る男性）
-    const player = {
-        x: 50,
-        y: 250,
-        size: 40,
-        emoji: '👨🏻‍💼',
-        speed: 6
-    };
-
-    // 飛び交うチョコとターゲット
-    let chocolates = [];
-    let coworkers = [];
-
-    // キー入力状態
-    const keys = {};
-
-    window.addEventListener('keydown', (e) => {
-        keys[e.code] = true;
-        // スペースキーでチョコを投げる（連射制限なしの全力投球）
-        if (e.code === 'Space' && !gameOver) {
-            chocolates.push({
-                x: player.x + 30,
-                y: player.y,
-                size: 25,
-                emoji: '🍫',
-                speed: 10
-            });
-            e.preventDefault(); // 画面スクロール防止
-        }
-    });
-
-    window.addEventListener('keyup', (e) => {
-        keys[e.code] = false;
-    });
-
-    // 敵（同僚）の生成
-    function spawnCoworker() {
-        if (frameCount % 60 === 0) { // 1秒ごとに生成
-            const emojis = ['👨‍💻', '👩‍💻', '🙎‍♂️', '🙎‍♀️', '🧟‍♂️']; // たまにゾンビ化した社員がいます
-            coworkers.push({
-                x: 800,
-                y: Math.random() * 400 + 50,
-                size: 40,
-                emoji: emojis[Math.floor(Math.random() * emojis.length)],
-                speed: 2 + Math.random() * 3 // スピードはランダム
-            });
-        }
+if (synth) {
+    try {
+        synth.onvoiceschanged = () => synth.getVoices();
+    } catch (e) {
+        console.warn('Speech synthesis initialization skipped.');
     }
+}
 
-    // 更新処理
-    function update() {
-        if (gameOver) return;
-        frameCount++;
-
-        // プレイヤーの移動
-        if (keys['ArrowUp'] && player.y > 30) player.y -= player.speed;
-        if (keys['ArrowDown'] && player.y < canvas.height - 30) player.y += player.speed;
-
-        // チョコの移動
-        chocolates.forEach((choco, index) => {
-            choco.x += choco.speed;
-            // 画面外に出たら消去
-            if (choco.x > 800) chocolates.splice(index, 1);
-        });
-
-        // 同僚の移動と当たり判定
-        spawnCoworker();
-        for (let i = coworkers.length - 1; i >= 0; i--) {
-            let c = coworkers[i];
-            c.x -= c.speed;
-
-            // 左端に到達したらゲームオーバー
-            if (c.x < 0) {
-                gameOver = true;
-            }
-
-            // チョコとの当たり判定
-            for (let j = chocolates.length - 1; j >= 0; j--) {
-                let choco = chocolates[j];
-                let dist = Math.hypot(c.x - choco.x, c.y - choco.y);
-                if (dist < 30) {
-                    // 命中！（撃沈）
-                    coworkers.splice(i, 1);
-                    chocolates.splice(j, 1);
-                    score += 10;
-                    break;
-                }
-            }
+function playVoice(text, type = 'normal') {
+    if (!synth) return;
+    try {
+        if (isStartVoicePlaying && type !== 'start') return;
+        if (type !== 'hit') {
+            synth.cancel();
         }
-    }
-
-    // 描画処理
-    function draw() {
-        // オフィスの背景
-        ctx.fillStyle = '#f4f4f9';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
         
-        // オフィスの床の線（飾り）
-        ctx.strokeStyle = '#e0e0e0';
-        ctx.lineWidth = 2;
-        for(let i=0; i<800; i+=100) {
-            ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, 500); ctx.stroke();
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.lang = 'ja-JP';
+        
+        if (type === 'throw') {
+            utterance.pitch = 0.8;
+            utterance.rate = 1.5;
+            utterance.volume = 0.6;
+        } else if (type === 'hit') {
+            utterance.pitch = 1.5;
+            utterance.rate = 1.8;
+            utterance.volume = 0.4;
+        } else if (type === 'start' || type === 'end') {
+            utterance.pitch = 0.8;
+            utterance.rate = 1.1;
+            if (type === 'start') {
+                isStartVoicePlaying = true;
+                utterance.onend = () => { isStartVoicePlaying = false; };
+            }
+        }
+        
+        const voices = synth.getVoices();
+        const maleVoice = voices.find(v => v.lang.includes('ja') && 
+            (v.name.includes('Ichiro') || v.name.includes('Keita') || v.name.toLowerCase().includes('male')));
+        if (maleVoice) utterance.voice = maleVoice;
+
+        synth.speak(utterance);
+    } catch (e) {
+        console.warn('Audio playback failed.');
+    }
+}
+
+// --- キャンバスとゲーム管理変数の設定 ---
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+let gameStatus = 'start';
+let score = 0;
+let timeLeft = 30; // 30秒に変更
+let gameStartTime = null;
+
+let player;
+let chocolates = [];
+let colleagues = [];
+let particles = [];
+let desks = [];
+
+// --- 机との衝突判定関数 ---
+function isCollidingWithDesks(x, y, radius) {
+    for (let desk of desks) {
+        let left = desk.x - 65;
+        let right = desk.x + 65;
+        let top = desk.y - 10;
+        let bottom = desk.y + 40;
+
+        if (x + radius > left && x - radius < right &&
+            y + radius > top && y - radius < bottom) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// --- リサイズと机の生成 ---
+function generateDesks() {
+    desks = [];
+    let cols = 3;
+    let rows = 2;
+    if (canvas.width < canvas.height) {
+        cols = 2;
+        rows = 3;
+    }
+    
+    const spaceX = canvas.width / cols;
+    const spaceY = canvas.height / rows;
+
+    for(let i = 0; i < cols; i++) {
+        for(let j = 0; j < rows; j++) {
+            desks.push({
+                x: spaceX * (i + 0.5) + (Math.random()*20-10), 
+                y: spaceY * (j + 0.5) + (Math.random()*20-10)
+            });
+        }
+    }
+}
+
+function resize() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    generateDesks();
+}
+window.addEventListener('resize', resize);
+
+// --- 入力管理 (タップで投げる) ---
+let tapX = 0;
+let tapY = 0;
+let isTapped = false;
+
+function handleTap(x, y) {
+    if(gameStatus !== 'playing') return;
+    tapX = x;
+    tapY = y;
+    isTapped = true;
+}
+
+canvas.addEventListener('mousedown', e => handleTap(e.clientX, e.clientY));
+canvas.addEventListener('touchstart', e => {
+    e.preventDefault();
+    if(e.touches.length > 0) handleTap(e.touches[0].clientX, e.touches[0].clientY);
+}, {passive: false});
+
+// --- ゲームオブジェクトのクラス定義 ---
+class Player {
+    constructor() {
+        this.x = canvas.width / 2;
+        this.y = canvas.height / 2;
+        this.speed = 1.0;
+        this.cooldown = 0;
+        this.throwAnim = 0;
+        
+        let attempts = 0;
+        while(isCollidingWithDesks(this.x, this.y, 15) && attempts < 100) {
+            this.x = 50 + Math.random() * Math.max(1, canvas.width - 100);
+            this.y = 50 + Math.random() * Math.max(1, canvas.height - 100);
+            attempts++;
+        }
+        
+        this.setNewTarget();
+    }
+
+    setNewTarget() {
+        let valid = false;
+        let attempts = 0;
+        while (!valid && attempts < 50) {
+            this.targetX = 50 + Math.random() * Math.max(1, canvas.width - 100);
+            this.targetY = 50 + Math.random() * Math.max(1, canvas.height - 100);
+            if (!isCollidingWithDesks(this.targetX, this.targetY, 15)) {
+                valid = true;
+            }
+            attempts++;
+        }
+        if (!valid) {
+            this.targetX = canvas.width / 2;
+            this.targetY = canvas.height / 2;
+        }
+    }
+
+    update() {
+        let dx = this.targetX - this.x;
+        let dy = this.targetY - this.y;
+        let dist = Math.hypot(dx, dy);
+
+        if (dist > this.speed) {
+            let moveX = (dx / dist) * this.speed;
+            let moveY = (dy / dist) * this.speed;
+            
+            let nextX = this.x + moveX;
+            let nextY = this.y + moveY;
+
+            let collidedX = false;
+            let collidedY = false;
+
+            if (!isCollidingWithDesks(nextX, this.y, 15)) {
+                this.x = nextX;
+            } else {
+                collidedX = true;
+            }
+
+            if (!isCollidingWithDesks(this.x, nextY, 15)) {
+                this.y = nextY;
+            } else {
+                collidedY = true;
+            }
+
+            if (collidedX || collidedY) {
+                this.setNewTarget();
+            }
+        } else {
+            this.setNewTarget();
         }
 
+        this.x = Math.max(20, Math.min(canvas.width - 20, this.x));
+        this.y = Math.max(20, Math.min(canvas.height - 20, this.y));
+
+        if (isTapped && this.cooldown <= 0) {
+            let shootX = tapX - this.x;
+            let shootY = tapY - this.y;
+            let angle = Math.atan2(shootY, shootX);
+            chocolates.push(new Chocolate(this.x, this.y - 10, angle));
+            this.cooldown = 35;
+            this.throwAnim = 15;
+            isTapped = false;
+            
+            const throwVoices = ['どうぞ！', 'はい！', 'そらっ！'];
+            playVoice(throwVoices[Math.floor(Math.random() * throwVoices.length)], 'throw');
+        }
+
+        if (this.cooldown > 0) this.cooldown--;
+        if (this.throwAnim > 0) this.throwAnim--;
+    }
+
+    draw(ctx) {
+        ctx.save();
+        ctx.translate(this.x, this.y);
+
+        ctx.fillStyle = 'rgba(0,0,0,0.15)';
+        ctx.beginPath(); ctx.ellipse(0, 20, 15, 5, 0, 0, Math.PI*2); ctx.fill();
+
+        ctx.fillStyle = '#1e3a8a';
+        ctx.beginPath(); ctx.roundRect(-12, -5, 24, 25, 4); ctx.fill();
+
+        ctx.fillStyle = '#fcd34d'; 
+        ctx.fillRect(-4, -8, 8, 4);
+
+        ctx.fillStyle = '#1e3a8a';
+        ctx.beginPath(); ctx.roundRect(-16, -5, 6, 15, 3); ctx.fill();
+        ctx.fillStyle = '#fcd34d';
+        ctx.beginPath(); ctx.arc(-13, 10, 4, 0, Math.PI*2); ctx.fill();
+
+        ctx.fillStyle = '#ea580c';
+        ctx.beginPath(); ctx.roundRect(-22, 5, 14, 18, 2); ctx.fill();
+        ctx.fillStyle = '#4a2511';
+        ctx.beginPath(); ctx.arc(-15, 14, 4, 0, Math.PI*2); ctx.fill();
+
+        let armY = this.throwAnim > 0 ? -15 : -5;
+        let handY = this.throwAnim > 0 ? -15 : 10;
+        
+        ctx.fillStyle = '#1e3a8a';
+        ctx.beginPath(); ctx.roundRect(10, armY, 6, 15, 3); ctx.fill();
+        ctx.fillStyle = '#fcd34d';
+        ctx.beginPath(); ctx.arc(13, handY, 4, 0, Math.PI*2); ctx.fill();
+
+        ctx.fillStyle = '#fcd34d';
+        ctx.beginPath(); ctx.arc(0, -15, 12, 0, Math.PI*2); ctx.fill();
+
+        ctx.fillStyle = '#6b7280';
+        ctx.beginPath();
+        ctx.arc(0, -17, 12, Math.PI, 0);
+        ctx.lineTo(12, -10);
+        ctx.lineTo(10, -15);
+        ctx.lineTo(-10, -15);
+        ctx.lineTo(-12, -10);
+        ctx.fill();
+
+        ctx.strokeStyle = '#374151';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.strokeRect(-9, -18, 6, 5);
+        ctx.strokeRect(3, -18, 6, 5);
+        ctx.moveTo(-3, -16); ctx.lineTo(3, -16);
+        ctx.stroke();
+
+        ctx.restore();
+    }
+}
+
+class Chocolate {
+    constructor(x, y, angle) {
+        this.x = x;
+        this.y = y;
+        this.speed = 6;
+        this.vx = Math.cos(angle) * this.speed;
+        this.vy = Math.sin(angle) * this.speed;
+        this.active = true;
+        this.rotation = 0;
+        this.rotSpeed = (Math.random() - 0.5) * 0.8;
+    }
+
+    update() {
+        this.x += this.vx;
+        this.y += this.vy;
+        this.rotation += this.rotSpeed;
+
+        if (this.x < 0 || this.x > canvas.width || this.y < 0 || this.y > canvas.height) {
+            this.active = false;
+        }
+    }
+
+    draw(ctx) {
+        ctx.save();
+        ctx.translate(this.x, this.y);
+        ctx.rotate(this.rotation);
+        
+        ctx.fillStyle = '#4a2511';
+        ctx.beginPath(); ctx.arc(0, 0, 7, 0, Math.PI*2); ctx.fill();
+        ctx.fillStyle = '#2c1205';
+        ctx.beginPath(); ctx.arc(-2, -2, 4, 0, Math.PI*2); ctx.fill();
+        ctx.fillStyle = '#5c3317';
+        ctx.beginPath(); ctx.arc(2, 3, 5, 0, Math.PI*2); ctx.fill();
+
+        ctx.restore();
+    }
+}
+
+class Colleague {
+    constructor(x, y) {
+        this.x = x;
+        this.y = y;
+        this.emoji = Math.random() < 0.5 ? '👨‍💻' : '👩‍💻';
+        this.active = true;
+        this.size = 36;
+    }
+
+    update() {}
+
+    draw(ctx) {
+        ctx.save();
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
+        
+        ctx.globalAlpha = 1.0; 
+        ctx.fillStyle = 'rgba(0,0,0,0.1)';
+        ctx.beginPath(); ctx.ellipse(this.x, this.y + 15, 15, 5, 0, 0, Math.PI*2); ctx.fill();
+        
+        ctx.globalAlpha = 1.0;
+        ctx.fillStyle = '#000000';
+        ctx.font = `${this.size}px Arial`;
+        ctx.fillText(this.emoji, this.x, this.y);
+        
+        ctx.restore();
+    }
+}
 
-        // プレイヤー描画
-        ctx.font = '40px sans-serif';
-        ctx.fillText(player.emoji, player.x, player.y);
+class Particle {
+    constructor(x, y, text, color) {
+        this.x = x;
+        this.y = y;
+        this.vy = -1 - Math.random();
+        this.life = 1.0;
+        this.text = text;
+        this.color = color;
+    }
+    update() {
+        this.y += this.vy;
+        this.life -= 0.02;
+    }
+    draw(ctx) {
+        ctx.globalAlpha = Math.max(0, this.life);
+        ctx.font = 'bold 24px Arial';
+        ctx.fillStyle = this.color;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.strokeText(this.text, this.x, this.y);
+        ctx.fillText(this.text, this.x, this.y);
+        ctx.globalAlpha = 1.0;
+    }
+}
 
-        // チョコ描画
-        ctx.font = '25px sans-serif';
-        chocolates.forEach(choco => {
-            ctx.fillText(choco.emoji, choco.x, choco.y);
-        });
+// --- ゲーム管理関数 ---
+function spawnColleague() {
+    if (desks.length === 0) return;
+    let desk = desks[Math.floor(Math.random() * desks.length)];
+    let offsetX = Math.random() < 0.5 ? -90 : 90; 
+    let offsetY = -10 + (Math.random() * 20);
+    
+    colleagues.push(new Colleague(desk.x + offsetX, desk.y + offsetY));
+}
 
-        // 同僚描画
-        ctx.font = '40px sans-serif';
-        coworkers.forEach(c => {
-            ctx.fillText(c.emoji, c.x, c.y);
-        });
+function startGame() {
+    document.getElementById('startScreen').classList.add('hidden');
+    document.getElementById('resultScreen').classList.add('hidden');
+    document.getElementById('hud').classList.remove('hidden');
+    
+    playVoice('カカオクランチの時間ですよー！どうぞ！', 'start');
 
-        // スコア表示
-        ctx.fillStyle = '#333';
-        ctx.font = 'bold 24px sans-serif';
-        ctx.textAlign = 'left';
-        ctx.fillText('配った数: ' + (score / 10) + ' 個', 20, 30);
+    player = new Player();
+    chocolates = [];
+    colleagues = [];
+    particles = [];
+    score = 0;
+    timeLeft = 30; // 30秒に変更
+    gameStartTime = null; // ループ開始時に初期化
+    updateHUD();
 
-        // ゲームオーバー表示
-        if (gameOver) {
-            ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-            ctx.fillStyle = 'white';
-            ctx.textAlign = 'center';
-            ctx.font = 'bold 50px sans-serif';
-            ctx.fillText('ゲームオーバー！', canvas.width / 2, canvas.height / 2 - 20);
-            ctx.font = '24px sans-serif';
-            ctx.fillText('F5キーを押して再チャレンジ', canvas.width / 2, canvas.height / 2 + 30);
+    for(let i=0; i<10; i++) {
+        spawnColleague();
+    }
+
+    gameStatus = 'playing';
+    requestAnimationFrame(gameLoop);
+}
+
+function updateHUD() {
+    document.getElementById('scoreDisplay').innerText = `撃沈: ${score}人`;
+    document.getElementById('timeDisplay').innerText = `残り時間: ${timeLeft}秒`;
+}
+
+function endGame() {
+    gameStatus = 'result';
+    document.getElementById('hud').classList.add('hidden');
+    document.getElementById('finalScore').innerText = score;
+    document.getElementById('resultScreen').classList.remove('hidden');
+    
+    playVoice('タイムアップ！お疲れ様でした。', 'end');
+}
+
+// --- 背景・オブジェクトの描画関数 ---
+function drawBackground() {
+    ctx.fillStyle = '#e5e7eb';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    
+    ctx.strokeStyle = '#d1d5db';
+    ctx.lineWidth = 1;
+    for(let x=0; x<canvas.width; x+=60) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,canvas.height); ctx.stroke(); }
+    for(let y=0; y<canvas.height; y+=60) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(canvas.width,y); ctx.stroke(); }
+}
+
+function drawDesk(ctx, desk) {
+    ctx.save();
+    ctx.fillStyle = '#cbd5e1';
+    ctx.shadowColor = 'rgba(0,0,0,0.1)';
+    ctx.shadowBlur = 10;
+    ctx.shadowOffsetX = 2;
+    ctx.shadowOffsetY = 4;
+    ctx.fillRect(desk.x - 70, desk.y - 40, 140, 80);
+    
+    ctx.shadowColor = 'transparent';
+    ctx.shadowBlur = 0;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 0;
+
+    ctx.font = '30px Arial';
+    ctx.fillStyle = 'black';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillText('💻', desk.x - 30, desk.y - 5);
+    ctx.font = '20px Arial';
+    ctx.fillText('☕', desk.x + 30, desk.y - 10);
+    ctx.fillStyle = '#94a3b8';
+    ctx.fillRect(desk.x + 10, desk.y + 10, 40, 20);
+    ctx.restore();
+}
+
+// --- メインループ ---
+function gameLoop(timestamp) {
+    if (gameStatus !== 'playing') return;
+
+    if (!gameStartTime) gameStartTime = timestamp;
+    let elapsed = timestamp - gameStartTime;
+    // 30秒から引くように変更
+    let newTimeLeft = Math.max(0, 30 - Math.floor(elapsed / 1000));
+    
+    if (newTimeLeft !== timeLeft) {
+        timeLeft = newTimeLeft;
+        updateHUD();
+        if (timeLeft <= 0) {
+            endGame();
+            return;
         }
     }
 
-    // メインループ
-    function gameLoop() {
-        update();
-        draw();
-        requestAnimationFrame(gameLoop);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    drawBackground();
+
+    player.update();
+    
+    for (let i = chocolates.length - 1; i >= 0; i--) {
+        chocolates[i].update();
+        if (!chocolates[i].active) chocolates.splice(i, 1);
     }
 
-    // ゲーム開始
-    gameLoop();
+    while(colleagues.length < 10) {
+        spawnColleague();
+    }
+
+    for (let i = colleagues.length - 1; i >= 0; i--) {
+        let coll = colleagues[i];
+        coll.update();
+        
+        for (let j = chocolates.length - 1; j >= 0; j--) {
+            let choc = chocolates[j];
+            if (!choc.active) continue;
+
+            let dist = Math.hypot(coll.x - choc.x, coll.y - choc.y);
+            if (dist < 25) {
+                coll.active = false;
+                choc.active = false;
+                score++;
+                updateHUD();
+                
+                particles.push(new Particle(coll.x, coll.y, '😵', '#ffffff'));
+                particles.push(new Particle(coll.x, coll.y - 20, '+1', '#f97316'));
+                
+                const hitVoices = ['うわっ', 'ぐはっ', 'ああっ'];
+                playVoice(hitVoices[Math.floor(Math.random() * hitVoices.length)], 'hit');
+                
+                break;
+            }
+        }
+
+        if (!coll.active) {
+            colleagues.splice(i, 1);
+        }
+    }
+
+    // Zソート（奥行き）での描画
+    let renderables = [];
+    desks.forEach(desk => {
+        renderables.push({ type: 'desk', obj: desk, y: desk.y + 30 });
+    });
+    colleagues.forEach(coll => {
+        if (coll.active) renderables.push({ type: 'colleague', obj: coll, y: coll.y + 15 });
+    });
+    renderables.push({ type: 'player', obj: player, y: player.y + 15 });
+    
+    renderables.sort((a, b) => a.y - b.y);
+    
+    renderables.forEach(item => {
+        if (item.type === 'desk') drawDesk(ctx, item.obj);
+        else item.obj.draw(ctx);
+    });
+
+    for (let i = chocolates.length - 1; i >= 0; i--) {
+        chocolates[i].draw(ctx);
+    }
+
+    for (let i = particles.length - 1; i >= 0; i--) {
+        particles[i].update();
+        particles[i].draw(ctx);
+        if (particles[i].life <= 0) particles.splice(i, 1);
+    }
+
+    requestAnimationFrame(gameLoop);
+}
+
+// --- 初期化 ---
+resize();
 </script>
 </body>
 </html>
+
+
