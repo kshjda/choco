@@ -50,7 +50,20 @@
         }
         .btn:hover { background-color: #c2410c; transform: scale(1.05); }
         .btn:active { transform: scale(0.95); }
+        .btn-secondary {
+            background-color: #4b5563;
+            padding: 0.75rem 1.5rem;
+            font-size: 1rem;
+        }
+        .btn-secondary:hover { background-color: #374151; }
+        
         .hud-text { text-shadow: 2px 2px 4px rgba(0,0,0,0.5); }
+        
+        /* 入力フォームのスタイル調整 */
+        input[type="text"] {
+            pointer-events: auto;
+            color: black;
+        }
     </style>
 </head>
 <body>
@@ -81,14 +94,33 @@
         <button class="btn" onclick="startGame()">配り歩く (START)</button>
     </div>
 
-    <!-- 結果画面 -->
+    <!-- 結果登録画面 -->
     <div id="resultScreen" class="screen-overlay hidden">
-        <h2 class="text-4xl font-bold mb-2 text-red-400">タイムアップ！</h2>
-        <p class="text-2xl mb-6">同僚たちは撃沈した。</p>
-        <div class="bg-white/10 p-6 rounded-2xl mb-8 backdrop-blur-md">
+        <h2 class="text-4xl font-bold mb-2 text-red-400 drop-shadow-md">タイムアップ！</h2>
+        <p class="text-2xl mb-4">同僚たちは撃沈した。</p>
+        
+        <div class="bg-white/10 p-6 rounded-2xl mb-6 backdrop-blur-md text-center">
             <p class="text-xl text-gray-300">配った人数</p>
-            <p class="text-6xl font-extrabold text-orange-400" id="finalScore">0 <span class="text-2xl">人</span></p>
+            <p class="text-6xl font-extrabold text-orange-400 drop-shadow-md" id="finalScore">0 <span class="text-2xl">人</span></p>
         </div>
+        
+        <div class="flex flex-col items-center gap-4 w-full max-w-xs">
+            <input type="text" id="playerName" class="w-full px-4 py-3 rounded-lg text-xl text-center shadow-inner focus:outline-none focus:ring-4 focus:ring-orange-500" placeholder="名前を入力してください" maxlength="10">
+            <button class="btn w-full" onclick="registerScore()">ランキングに登録</button>
+            <button class="btn btn-secondary w-full" onclick="showRanking()">登録せずにスキップ</button>
+        </div>
+    </div>
+
+    <!-- ランキング画面 -->
+    <div id="rankingScreen" class="screen-overlay hidden">
+        <h2 class="text-4xl font-bold mb-6 text-yellow-400 drop-shadow-lg">🏆 ランキング 🏆</h2>
+        
+        <div class="bg-white/10 p-6 rounded-2xl mb-8 backdrop-blur-md w-80 max-w-full shadow-lg border border-white/20">
+            <ol id="rankingList" class="text-xl text-left space-y-3">
+                <!-- ランキングデータがここに挿入されます -->
+            </ol>
+        </div>
+        
         <button class="btn" onclick="startGame()">もう一度配る</button>
     </div>
 </div>
@@ -151,8 +183,11 @@ const ctx = canvas.getContext('2d');
 
 let gameStatus = 'start';
 let score = 0;
-let timeLeft = 30; // 30秒に変更
+let timeLeft = 30; // 30秒
 let gameStartTime = null;
+
+// ランキングデータ用配列
+let rankings = []; 
 
 let player;
 let chocolates = [];
@@ -218,8 +253,13 @@ function handleTap(x, y) {
     isTapped = true;
 }
 
-canvas.addEventListener('mousedown', e => handleTap(e.clientX, e.clientY));
+canvas.addEventListener('mousedown', e => {
+    // UIレイヤーのクリックは除外
+    if(e.target.tagName !== 'CANVAS') return;
+    handleTap(e.clientX, e.clientY);
+});
 canvas.addEventListener('touchstart', e => {
+    if(e.target.tagName !== 'CANVAS') return;
     e.preventDefault();
     if(e.touches.length > 0) handleTap(e.touches[0].clientX, e.touches[0].clientY);
 }, {passive: false});
@@ -474,6 +514,7 @@ function spawnColleague() {
 function startGame() {
     document.getElementById('startScreen').classList.add('hidden');
     document.getElementById('resultScreen').classList.add('hidden');
+    document.getElementById('rankingScreen').classList.add('hidden');
     document.getElementById('hud').classList.remove('hidden');
     
     playVoice('カカオクランチの時間ですよー！どうぞ！', 'start');
@@ -483,8 +524,8 @@ function startGame() {
     colleagues = [];
     particles = [];
     score = 0;
-    timeLeft = 30; // 30秒に変更
-    gameStartTime = null; // ループ開始時に初期化
+    timeLeft = 30; // 30秒
+    gameStartTime = null; 
     updateHUD();
 
     for(let i=0; i<10; i++) {
@@ -503,10 +544,63 @@ function updateHUD() {
 function endGame() {
     gameStatus = 'result';
     document.getElementById('hud').classList.add('hidden');
+    
+    // スコアと入力フォームの初期化
     document.getElementById('finalScore').innerText = score;
+    document.getElementById('playerName').value = '';
+    
     document.getElementById('resultScreen').classList.remove('hidden');
     
     playVoice('タイムアップ！お疲れ様でした。', 'end');
+}
+
+// --- ランキング機能 ---
+function registerScore() {
+    let nameInput = document.getElementById('playerName').value.trim();
+    if (!nameInput) {
+        nameInput = "名無し社員";
+    }
+    
+    // ランキング配列に追加して降順ソート
+    rankings.push({ name: nameInput, score: score });
+    rankings.sort((a, b) => b.score - a.score);
+    
+    showRanking();
+}
+
+function showRanking() {
+    document.getElementById('resultScreen').classList.add('hidden');
+    
+    const listElement = document.getElementById('rankingList');
+    listElement.innerHTML = '';
+    
+    if (rankings.length === 0) {
+        listElement.innerHTML = '<li class="text-center text-gray-300">まだ記録がありません</li>';
+    } else {
+        // 上位5名を表示
+        const top5 = rankings.slice(0, 5);
+        top5.forEach((r, index) => {
+            const li = document.createElement('li');
+            li.className = "flex justify-between items-center border-b border-white/20 pb-2";
+            
+            let medal = '';
+            if (index === 0) medal = '🥇';
+            else if (index === 1) medal = '🥈';
+            else if (index === 2) medal = '🥉';
+            else medal = `<span class="inline-block w-6 text-center text-gray-400 text-base">${index + 1}.</span>`;
+            
+            li.innerHTML = `
+                <div class="flex items-center gap-2 overflow-hidden">
+                    <span>${medal}</span>
+                    <span class="truncate max-w-[150px] font-bold" title="${r.name}">${r.name}</span>
+                </div>
+                <span class="font-extrabold text-orange-300">${r.score} <span class="text-sm font-normal text-white">人</span></span>
+            `;
+            listElement.appendChild(li);
+        });
+    }
+    
+    document.getElementById('rankingScreen').classList.remove('hidden');
 }
 
 // --- 背景・オブジェクトの描画関数 ---
@@ -552,7 +646,6 @@ function gameLoop(timestamp) {
 
     if (!gameStartTime) gameStartTime = timestamp;
     let elapsed = timestamp - gameStartTime;
-    // 30秒から引くように変更
     let newTimeLeft = Math.max(0, 30 - Math.floor(elapsed / 1000));
     
     if (newTimeLeft !== timeLeft) {
@@ -643,5 +736,4 @@ resize();
 </script>
 </body>
 </html>
-
 
